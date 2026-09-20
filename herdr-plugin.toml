@@ -1,0 +1,57 @@
+id = "workspace-groups"
+name = "Workspace Groups"
+version = "0.6.0"
+min_herdr_version = "0.9.1"
+description = "Group related workspaces in Herdr's sidebar"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["python3", "group_ws.py", "sync", "--quiet"]
+
+[[actions]]
+id = "manage"
+title = "Manage workspace groups"
+contexts = ["workspace"]
+command = ["python3", "group_ws.py", "open"]
+
+[[actions]]
+id = "sync"
+title = "Sync workspace groups"
+contexts = ["workspace"]
+command = ["python3", "group_ws.py", "sync"]
+
+[[actions]]
+id = "setup-sidebar"
+title = "Configure workspace group sidebar"
+contexts = ["workspace"]
+command = ["python3", "configure_sidebar.py", "--apply"]
+
+[[actions]]
+id = "sidebar-config"
+title = "Print workspace group sidebar config"
+contexts = ["workspace"]
+command = ["python3", "configure_sidebar.py", "--print"]
+
+[[events]]
+on = "workspace.created"
+command = ["python3", "group_ws.py", "sync", "--quiet"]
+
+[[events]]
+on = "workspace.closed"
+command = ["python3", "group_ws.py", "sync", "--quiet"]
+
+[[events]]
+on = "workspace.reordered"
+command = ["python3", "group_ws.py", "sync", "--quiet"]
+
+[[events]]
+on = "workspace.renamed"
+command = ["python3", "group_ws.py", "sync", "--quiet"]
+
+[[panes]]
+id = "manager"
+title = "Workspace groups"
+placement = "popup"
+width = "80%"
+height = "75%"
+command = ["python3", "group_ws.py", "manage"]
