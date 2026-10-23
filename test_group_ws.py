@@ -1,13 +1,16 @@
 from pathlib import Path
+from copy import deepcopy
 import tempfile
 import tomllib
 
 import unittest
+from unittest.mock import Mock, patch
 
 from configure_sidebar import ConfigError, apply_config
 
 from group_ws import (
     GroupManager,
+    StateStore,
     drop_linked_worktree_assignments,
     group_edges,
     move_workspace_in_section,
@@ -192,6 +195,125 @@ class OrderingTests(unittest.TestCase):
 
         manager.selected = 1
         self.assertEqual(manager.selected_id(), "w1")
+
+class GroupRenameTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        environment = patch.dict("os.environ", {"HERDR_PLUGIN_STATE_DIR": directory.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.store = StateStore("/tmp/herdr-rename-test.sock")
+        self.state = {
+            "version": 1,
+            "sessions": {
+                self.store.session_key: {
+                    "groups": ["Personal", "Work", "Later"],
+                    "assignments": {"p": "Personal", "w1": "Work", "w2": "Work", "l": "Later"},
+                    "colors": {"Personal": "blue", "Work": "green", "Later": "red"},
+                },
+                "other-session": {
+                    "groups": ["Work"],
+                    "assignments": {"other": "Work"},
+                    "colors": {"Work": "peach"},
+                },
+            },
+        }
+        self.store.save(self.state)
+        self.workspaces = [
+            {"workspace_id": "p"},
+            {"workspace_id": "w1", "worktree": {"repo_key": "/repo/.git", "is_linked_worktree": False}},
+            {"workspace_id": "wc", "worktree": {"repo_key": "/repo/.git", "is_linked_worktree": True}},
+            {"workspace_id": "w2"},
+            {"workspace_id": "l"},
+            {"workspace_id": "ungrouped"},
+        ]
+        self.client = Mock()
+        self.client.list_workspaces.return_value = self.workspaces
+        self.manager = GroupManager(self.client, self.store)
+        self.manager.selected = 1
+
+    def test_rename_persists_members_order_color_and_session_isolation(self):
+        self.manager.rename_group("  Client   Work  ")
+
+        saved = self.store.load()
+        session = self.store.session(saved)
+        self.assertEqual(session["groups"], ["Personal", "Client Work", "Later"])
+        self.assertEqual(
+            session["assignments"],
+            {"p": "Personal", "w1": "Client Work", "w2": "Client Work", "l": "Later"},
+        )
+        self.assertEqual(session["colors"], {"Personal": "blue", "Client Work": "green", "Later": "red"})
+        self.assertEqual(saved["sessions"]["other-session"], self.state["sessions"]["other-session"])
+        self.assertEqual(self.manager.selected_id(), "w1")
+        self.assertEqual(self.manager.workspaces, self.workspaces)
+        self.client.move_all.assert_not_called()
+        metadata = {call.args[0]: call.args[1] for call in self.client.report_group.call_args_list}
+        for workspace_id in ("w1", "w2", "wc"):
+            self.assertEqual(metadata[workspace_id]["group"], "Client Work")
+            self.assertEqual(metadata[workspace_id]["group_color"], "green")
+        self.assertEqual(metadata["w1"]["group_badge_green"], "[Client Work]")
+        self.assertEqual(metadata["w2"]["group_badge_green"], "[Client Work]")
+        reopened = GroupManager(self.client, self.store)
+        reopened.selected = 1
+        self.assertEqual(reopened.selected_group(), "Client Work")
+
+    def test_invalid_or_unchanged_names_leave_state_and_sidebar_untouched(self):
+        cases = [
+            ("", "cannot be empty"),
+            (" \t\n ", "cannot be empty"),
+            ("x" * 33, "32 characters"),
+            (" Personal ", "already exists"),
+            (" Work ", "unchanged"),
+        ]
+        original = deepcopy(self.manager.state)
+        for name, message in cases:
+            with self.subTest(name=name):
+                self.manager.rename_group(name)
+                self.assertIn(message, self.manager.message)
+                self.assertEqual(self.manager.state, original)
+                self.assertEqual(self.store.load(), original)
+        self.client.report_group.assert_not_called()
+
+    def test_ungrouped_workspace_cannot_rename_a_group(self):
+        self.manager.selected = 5
+        self.manager.rename_group("New")
+        self.assertIn("not grouped", self.manager.message)
+        self.assertEqual(self.store.load(), self.state)
+        self.client.report_group.assert_not_called()
+
+    def test_rename_accepts_unicode_name_at_length_limit(self):
+        name = "项" * 32
+        self.manager.rename_group(name)
+        self.assertEqual(self.store.session(self.store.load())["assignments"]["w2"], name)
+
+    def test_cancelled_rename_leaves_state_untouched(self):
+        with patch.object(self.manager, "text_prompt", return_value=None) as prompt:
+            self.manager.request_group_rename(Mock())
+        self.assertEqual(prompt.call_args.kwargs, {"initial": "Work", "submit": "rename"})
+        self.assertEqual(self.store.load(), self.state)
+        self.client.report_group.assert_not_called()
+
+    def test_rename_button_updates_the_entire_group(self):
+        with patch.object(self.manager, "text_prompt", return_value="Projects"):
+            self.assertFalse(self.manager.handle_action(Mock(), "rename"))
+        self.assertEqual(self.store.session(self.store.load())["assignments"]["w2"], "Projects")
+
+    def test_rename_prompt_prefills_name_and_supports_editing_and_cancel(self):
+        for keys, expected in [(["\x7f", "!", "\n"], "Wor!"), (["\x1b"], None)]:
+            with self.subTest(keys=keys):
+                screen = Mock()
+                screen.getmaxyx.return_value = (30, 100)
+                screen.get_wch.side_effect = keys
+                with patch.object(self.manager, "draw"), patch("group_ws.curses.curs_set"), patch(
+                    "group_ws.curses.color_pair", return_value=0
+                ):
+                    result = self.manager.text_prompt(screen, "Rename group", initial="Work", submit="rename")
+                self.assertEqual(result, expected)
+                rendered = [str(call.args[2]) for call in screen.addnstr.call_args_list]
+                self.assertTrue(any("Work" in text for text in rendered))
+                self.assertTrue(any("Enter rename" in text for text in rendered))
+
 
 class SidebarConfigurationTests(unittest.TestCase):
     def test_apply_adds_parseable_sidebar_config(self):

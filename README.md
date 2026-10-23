@@ -79,6 +79,7 @@ herdr server reload-config
 | `j` / `k` | Select the next or previous parent workspace |
 | `J` / `K` | Move a workspace within its current group |
 | `g` / `Enter` | Assign to an existing or new group |
+| `n` | Rename the selected workspace's group |
 | `u` | Remove from the current group |
 | `c` | Choose the group color |
 | `h` / `l` | Move the selected group earlier or later |
@@ -88,6 +89,12 @@ herdr server reload-config
 | `q` / `Esc` | Close |
 
 Mouse input remains available as a secondary path: click parent rows and key-labeled controls, or double/right-click a parent row to assign it.
+
+To rename a group, select any of its parent workspaces and press `n` (or click
+`Rename`). The prompt starts with the current name; edit it and press Enter to
+apply, or Esc to cancel. All members, the group's position and color, and inherited
+worktree metadata are preserved. Names are limited to 32 characters, whitespace is
+normalized, and empty names or names already used by another group are rejected.
 
 ## Behavior
 

@@ -613,6 +613,41 @@ class GroupManager:
         self.assignments[workspace_id] = group
         self.persist_and_sync()
 
+    def rename_group(self, name: str) -> None:
+        group = self.selected_group()
+        if not group:
+            self.message = "The selected workspace is not grouped"
+            return
+        name = " ".join(name.split())
+        if not name:
+            self.message = "Group names cannot be empty"
+            return
+        if len(name) > 32:
+            self.message = "Group names are limited to 32 characters"
+            return
+        if name == group:
+            self.message = "Group name unchanged"
+            return
+        if name in self.groups:
+            self.message = f"Group already exists: {name}"
+            return
+        self.groups[self.groups.index(group)] = name
+        for workspace_id, assigned in self.assignments.items():
+            if assigned == group:
+                self.assignments[workspace_id] = name
+        self.colors[name] = self.colors.pop(group)
+        self.persist_and_sync()
+        self.message = f"Renamed group: {group} → {name}"
+
+    def request_group_rename(self, screen: curses.window) -> None:
+        group = self.selected_group()
+        if not group:
+            self.message = "The selected workspace is not grouped"
+            return
+        name = self.text_prompt(screen, "Rename group", initial=group, submit="rename")
+        if name is not None:
+            self.rename_group(name)
+
     def ungroup(self) -> None:
         workspace_id = self.selected_id()
         if workspace_id and workspace_id in self.assignments:
@@ -725,6 +760,8 @@ class GroupManager:
                 self.pick_group(screen)
             elif key in ("c", "C"):
                 self.pick_color(screen)
+            elif key in ("n", "N"):
+                self.request_group_rename(screen)
             elif key in ("u", "U", curses.KEY_BACKSPACE, "\x7f"):
                 self.ungroup()
             elif key in ("x", "X"):
@@ -770,6 +807,8 @@ class GroupManager:
     def handle_action(self, screen: curses.window, action: str) -> bool:
         if action == "assign":
             self.pick_group(screen)
+        elif action == "rename":
+            self.request_group_rename(screen)
         elif action == "color":
             self.pick_color(screen)
         elif action == "ungroup":
@@ -917,7 +956,7 @@ class GroupManager:
         screen.addnstr(
             2,
             2,
-            "j/k select · J/K move · g assign · c color · h/l group order · ? help",
+            "j/k select · J/K move · g assign · n rename · c color · h/l order · ? help",
             width - 4,
             curses.A_BOLD,
         )
@@ -971,6 +1010,7 @@ class GroupManager:
 
         actions = [
             ("assign", "g Group"),
+            ("rename", "n Rename"),
             ("color", "c Color"),
             ("ungroup", "u Remove"),
             ("move_up", "K Up"),
@@ -1148,8 +1188,10 @@ class GroupManager:
         self.assign(choice)
         return True
 
-    def text_prompt(self, screen: curses.window, label: str) -> str | None:
-        value = ""
+    def text_prompt(
+        self, screen: curses.window, label: str, initial: str = "", submit: str = "create"
+    ) -> str | None:
+        value = initial
         curses.curs_set(1)
         try:
             while True:
@@ -1162,7 +1204,7 @@ class GroupManager:
                 screen.addnstr(top, left + 2, f" {label} ", box_width - 4, curses.color_pair(1) | curses.A_BOLD)
                 field = clipped(value, box_width - 6).ljust(box_width - 6)
                 screen.addnstr(top + 2, left, f"│  {field}  │", box_width, curses.color_pair(2))
-                hint = "Enter create · Esc cancel"
+                hint = f"Enter {submit} · Esc cancel"
                 screen.addnstr(top + 4, left, ("│ " + hint).ljust(box_width - 1) + "│", box_width, curses.A_DIM)
                 screen.addstr(top + 5, left, "╰" + "─" * (box_width - 2) + "╯", curses.color_pair(1))
                 screen.move(top + 2, min(left + box_width - 3, left + 3 + len(value)))
@@ -1233,6 +1275,7 @@ class GroupManager:
             "",
             "Grouping",
             "Enter / g   Choose an existing group or create a new one",
+            "n           Rename the selected group",
             "c           Choose the selected group's color",
             "u           Remove the workspace from its group",
             "x           Delete the selected group",
